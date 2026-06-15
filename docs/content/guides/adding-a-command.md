@@ -4,15 +4,15 @@ description: "Model a real yelp record and expose it as a command, a route, and 
 weight: 10
 ---
 
-The scaffold ships one example type, `page`. Real work means modelling the
-records yelp actually serves. You do that in two files, and every surface
-updates itself.
+`yelp` already models businesses, reviews, users, suggestions, and categories.
+Adding another surface means modelling one more record and declaring its
+operation. You do that in two files, and every surface updates itself.
 
 ## 1. Model the record
 
-In `yelp/yelp.go`, add a struct for the thing you are fetching
-and a client method that returns it. The `kit` struct tags decide how a host
-addresses the record:
+In the `yelp` package, add a struct for the thing you are fetching and a client
+method that returns it. The `kit` struct tags decide how a host addresses the
+record:
 
 ```go
 type Item struct {
@@ -81,7 +81,8 @@ Two flags shape how a host treats an operation:
 - **`List: true`** marks a member-lister for a parent resource. It answers
   `ant ls`. A list op should emit records that are themselves addressable
   (often a lightweight stub of a resolver type), so every member is a URI a host
-  can follow. The example `links` op does this with page stubs.
+  can follow. The `reviews` op does this: each review carries an edge back to its
+  business and on to the reviewer's profile.
 
 ## Map errors to exit codes
 

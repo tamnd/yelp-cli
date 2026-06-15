@@ -4,8 +4,26 @@ description: "Environment variables, defaults, and the data directory."
 weight: 20
 ---
 
-yelp needs almost no configuration: it runs anonymously against public
-data out of the box. The settings below let you tune politeness and storage.
+`yelp` needs almost no configuration: it runs anonymously against public data out
+of the box. The one credential it reads is the optional `YELP_API_KEY`, which
+turns on the Fusion API plane. The settings below let you tune the plane,
+politeness, and storage.
+
+## The Fusion API key
+
+`YELP_API_KEY` holds a free Yelp developer key. When it is set, `yelp` uses the
+Fusion API plane, which answers from any network; without it, `yelp` uses the web
+plane, which is best-effort behind Yelp's bot wall. The key is read from the
+environment only, never a flag, so it never lands in shell history or a process
+list.
+
+```bash
+export YELP_API_KEY=...     # turns on the fusion plane
+yelp biz garaje-san-francisco --plane web   # force the web plane for one run
+```
+
+`--plane auto` (the default) picks fusion when the key is set and web otherwise.
+`--plane fusion` without a key, or `categories` on the web plane, exits 4.
 
 ## Defaults
 
@@ -42,6 +60,6 @@ Flags win over environment variables, which win over the built-in defaults.
 session fills a local database without a separate import step:
 
 ```bash
-yelp page <path> --db out.db        # SQLite file
-yelp page <path> --db 'postgres://...'
+yelp reviews garaje-san-francisco --db out.db        # SQLite file
+yelp search "tacos" "San Francisco, CA" --db 'postgres://...'
 ```

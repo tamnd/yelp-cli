@@ -4,30 +4,58 @@ description: "The handful of things that trip people up, and how to fix each one
 weight: 40
 ---
 
-Most of these come down to network reality or how yelp serves its data,
-not a bug. Fill this page out with the site-specific cases as you find them.
+Most of these come down to network reality or how Yelp serves its data, not a
+bug. The exit code tells the cases apart.
 
-## Requests start failing or returning 429
+## Exit codes
 
-yelp rate-limits like any public site. yelp already paces
-requests and retries the transient failures, but a hard limit still means
-backing off. Raise the delay between requests with `--rate` (for example
-`--rate 1s`), lower any concurrency you have set, and retry later. A burst of
-429 or 5xx responses is the site asking you to slow down, not a defect.
+| Exit | Meaning |
+| --- | --- |
+| 0 | ok |
+| 2 | usage error |
+| 3 | no results (the resource is genuinely empty) |
+| 4 | need auth: the bot wall, a missing `YELP_API_KEY`, or a rejected key |
+| 5 | rate limited (raise `--retries`, or the Fusion daily quota) |
+| 6 | not found (unknown alias or user id, bad reference) |
+| 8 | network error |
+
+## A web-plane read exits 4
+
+The web plane sits behind Yelp's PerimeterX bot manager, which classifies a
+request on IP reputation and TLS fingerprint and hard-walls datacenter IPs. From a
+home or mobile network the web surfaces usually answer; from a datacenter or CI
+they hit the wall and exit 4. This tool does not forge a TLS fingerprint and does
+not rent or rotate IPs to get past the edge. The two remedies it names are to run
+from a residential or mobile network, or to set `YELP_API_KEY` and use the Fusion
+API, which answers from any network:
+
+```bash
+export YELP_API_KEY=...     # a free Yelp developer key
+yelp biz garaje-san-francisco
+```
+
+## A command says it needs a key
+
+`categories` is fusion plane only (there is no clean web equivalent), and
+`--plane fusion` needs a key. Both exit 4 when `YELP_API_KEY` is unset. Set the
+key, or drop `--plane fusion` to let the web plane try. A key that is set but
+rejected (a 401 from a missing, malformed, or revoked key) also exits 4; check the
+key value.
+
+## Requests start returning 429
+
+`yelp` already paces requests and retries the transient failures, but a hard limit
+still means backing off. Raise the delay between requests with `--rate` (for
+example `--rate 1s`) and retry later. On the fusion plane a sustained 429 is the
+Fusion daily quota; slow down or raise the quota in the developer portal.
 
 ## Nothing is found for something you expected
 
-The public surface is not the whole site. Some data sits behind a login, a
-region, or a page that only renders with JavaScript, and that part is not
-reachable without the right session. Check that the input is spelled the way the
-site uses it, try a broader query, and see whether the same thing is visible in
-a private browser window before assuming it is missing.
-
-## A command needs a session
-
-Where a surface is gated, yelp reads a cookie or token you supply
-rather than logging in for you. Pass it on the command that needs it and keep it
-out of your shell history. Commands that work without one stay anonymous.
+The public surface is not the whole site, and the web plane only carries what a
+page actually shows. Check that the alias is spelled the way Yelp uses it (the
+slug in `/biz/<alias>`), try a broader search term or a different location, and
+remember that the web `reviews` feed pages while the fusion plane returns only
+three review excerpts per business.
 
 ## The binary is not on your PATH
 

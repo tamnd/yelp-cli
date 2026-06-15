@@ -15,14 +15,31 @@ page is the map; keep it in step with the real command tree as you add to it.
 
 | Command | What it does |
 |---|---|
-| `page <ref>` | Fetch a page by path or URL |
-| `links <ref>` | List the pages a page links to |
+| `search <term> [location]` | Business search by term and place |
+| `biz <alias>` | One business by alias |
+| `reviews <alias>` | A business's reviews |
+| `user <id>` | A reviewer's public profile (web plane only) |
+| `suggest <prefix>` | Autocomplete suggestions for a prefix |
+| `categories` | The Yelp category taxonomy (needs `YELP_API_KEY`) |
+| `ref id <ref>` | Classify a reference into its (kind, id), offline |
+| `ref url <kind> <id>` | Build the canonical URL for a (kind, id), offline |
 | `serve [--addr]` | Serve the operations over HTTP as NDJSON |
 | `mcp` | Run as an MCP server over stdio |
 | `version` | Print the version and exit |
 
-`page` and `links` are the example operations the scaffold ships. Add a row here
-per operation you declare in `yelp/domain.go`.
+A business is addressed by its alias, like `garaje-san-francisco`, or a `/biz/`
+URL; a user by the id in a `/user_details?userid=` URL.
+
+## Plane and search flags
+
+| Flag | Meaning |
+|---|---|
+| `--plane` | Data plane: `auto`, `web`, or `fusion` (default `auto`; `fusion` needs `YELP_API_KEY`) |
+| `--location` | Place to scope a search or autocomplete to, e.g. `"Oakland, CA"` |
+| `--sort` | Search order: `best_match`, `rating`, `review_count`, or `distance` |
+| `--price` | Search price filter: any of `1,2,3,4` comma-joined |
+| `--locale` | Locale for prices, hours, and dates (default `en_US`) |
+| `--user-agent` | User-Agent sent with each web-plane request |
 
 ## Global flags
 
@@ -38,6 +55,8 @@ These are shared by every operation, so they work the same on every command.
 | `--rate` | Minimum delay between requests |
 | `--retries` | Retry attempts on rate limit or 5xx |
 | `--timeout` | Per-request timeout |
+| `--cache-ttl` | How long a cached response stays fresh |
+| `--refresh` | Fetch fresh copies and rewrite the cache, ignoring any hit |
 | `--data-dir` | Override the data directory |
 | `--no-cache` | Bypass on-disk caches |
 | `--db` | Tee every record into a store (e.g. `out.db`, `postgres://...`) |

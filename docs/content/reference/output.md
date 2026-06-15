@@ -35,7 +35,7 @@ yelp <command> -o raw     # the underlying bytes, unformatted
 Keep only the fields you want:
 
 ```bash
-yelp <command> --fields id,title,url
+yelp search "tacos" "San Francisco, CA" --fields name,rating,review_count
 ```
 
 `--no-header` drops the header row in `table` and `csv` output, which helps when
@@ -47,7 +47,7 @@ For full control over each line, apply a Go text/template. Fields are the JSON
 keys, capitalised:
 
 ```bash
-yelp <command> --template '{{.URL}} {{.Title}}'
+yelp search "tacos" "San Francisco, CA" --template '{{.Name}} {{.Rating}}'
 ```
 
 ## Why auto-detection helps

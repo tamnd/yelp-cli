@@ -1,60 +1,134 @@
-// Package yelp is the library behind the yelp command line:
-// the HTTP client, request shaping, and the typed data models for yelp.
+// Package yelp is the library behind the yelp command line: a two-plane HTTP
+// client for Yelp's public data, and the typed records every command emits.
 //
-// The Client here is the spine every command shares. It sets a real
-// User-Agent, paces requests so a busy session stays polite, and retries the
-// transient failures (429 and 5xx) that any public site throws under load.
-// Build your endpoint calls and JSON decoding on top of it.
+// There are two ways into Yelp's public data, and this client speaks both. The
+// web plane reads what a logged-out browser reads: a biz page embeds its detail
+// as a schema.org JSON-LD island, reviews come from the review_feed JSON
+// endpoint, autocomplete from the suggest endpoint, search from the search page.
+// Yelp fronts the web site with a PerimeterX bot wall that classifies a request
+// on IP reputation and TLS fingerprint and hard-walls datacenter IPs, so the web
+// plane is best-effort: a wall returns ErrBlocked (exit 4). The fusion plane is
+// Yelp's official Fusion API at api.yelp.com/v3, addressed with a bearer key the
+// operator supplies in YELP_API_KEY (a free developer key); it answers from any
+// network. The client uses fusion when a key is present and web otherwise, or the
+// plane --plane forces. This client does not forge a TLS fingerprint and does not
+// rent or rotate IPs to get past the web edge: it reads what a logged-out browser
+// reads, the way it reads it, and offers the fusion plane as the honest reliable
+// path. Each surface lives in its own file (search.go, biz.go, reviews.go,
+// user.go, suggest.go, categories.go) with both plane implementations and the
+// record mapping; this file holds the shared client and fusion.go the bearer
+// transport.
 package yelp
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"net/http"
-	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
-// DefaultUserAgent identifies the client to yelp. A real, honest
-// User-Agent is both polite and the thing most likely to keep you unblocked.
-const DefaultUserAgent = "yelp/dev (+https://github.com/tamnd/yelp-cli)"
-
-// Host is the site this client talks to, and the host the URI driver in
-// domain.go claims. The scaffold points it at yelp.com; change it once you
-// know the real endpoints you want to read.
-const Host = "yelp.com"
-
-// BaseURL is the root every request is built from.
-const BaseURL = "https://" + Host
-
-// Client talks to yelp over HTTP.
+// Client talks to Yelp over both planes. It paces requests, retries the
+// transient failures, detects the bot wall, and caches response bodies on disk
+// keyed by the request.
 type Client struct {
-	HTTP      *http.Client
-	UserAgent string
-	// Rate is the minimum gap between requests. Zero means no pacing.
-	Rate    time.Duration
-	Retries int
+	HTTP       *http.Client
+	BaseURL    string // web plane root
+	FusionBase string // fusion plane root
+	UserAgent  string
+	Locale     string
+	Plane      string
+	Location   string
+	Latitude   float64
+	Longitude  float64
+	Sort       string
+	Price      string
+	Delay      time.Duration
+	Retries    int
 
+	apiKey string // the Fusion bearer key, from YELP_API_KEY; empty leaves fusion unavailable
+
+	cache   *cache
+	refresh bool
+
+	mu   sync.Mutex
 	last time.Time
 }
 
-// NewClient returns a Client with sensible defaults: a 30s timeout, a 200ms
-// minimum gap between requests, and five retries on transient errors.
-func NewClient() *Client {
-	return &Client{
-		HTTP:      &http.Client{Timeout: 30 * time.Second},
-		UserAgent: DefaultUserAgent,
-		Rate:      200 * time.Millisecond,
-		Retries:   5,
+// NewClient builds a client from cfg.
+func NewClient(cfg Config) *Client {
+	c := &Client{
+		HTTP:       &http.Client{Timeout: cfg.Timeout},
+		BaseURL:    cfg.BaseURL,
+		FusionBase: cfg.FusionBase,
+		UserAgent:  cfg.UserAgent,
+		Locale:     cfg.Locale,
+		Plane:      cfg.Plane,
+		Location:   cfg.Location,
+		Latitude:   cfg.Latitude,
+		Longitude:  cfg.Longitude,
+		Sort:       cfg.Sort,
+		Price:      cfg.Price,
+		Delay:      cfg.Delay,
+		Retries:    cfg.Retries,
+		apiKey:     cfg.APIKey,
+		refresh:    cfg.Refresh,
+	}
+	if c.BaseURL == "" {
+		c.BaseURL = BaseURL
+	}
+	if c.FusionBase == "" {
+		c.FusionBase = fusionBase
+	}
+	if c.UserAgent == "" {
+		c.UserAgent = DefaultUserAgent
+	}
+	if c.Locale == "" {
+		c.Locale = defaultLocale
+	}
+	if c.Plane == "" {
+		c.Plane = planeAuto
+	}
+	if !cfg.NoCache {
+		c.cache = newCache(cfg.CacheDir, cfg.CacheTTL)
+	}
+	return c
+}
+
+// usesFusion reports whether a call should take the fusion plane. Auto picks
+// fusion only when a key is set; web and fusion force the choice.
+func (c *Client) usesFusion() bool {
+	switch c.Plane {
+	case planeFusion:
+		return true
+	case planeWeb:
+		return false
+	default:
+		return c.apiKey != ""
 	}
 }
 
-// Get fetches url and returns the response body. It paces and retries according
-// to the client's settings. The caller owns nothing extra; the body is read
-// fully and closed here.
-func (c *Client) Get(ctx context.Context, url string) ([]byte, error) {
+// requireFusion returns the reason the fusion plane is unavailable for a call
+// that needs it, or nil.
+func (c *Client) requireFusion() error {
+	if c.apiKey == "" {
+		return ErrNeedKey
+	}
+	return nil
+}
+
+// get fetches a web-plane URL and returns the response body: paced, retried,
+// cached, and wall-checked.
+func (c *Client) get(ctx context.Context, url string) ([]byte, error) {
+	ck := "web:" + url
+	if !c.refresh {
+		if b, ok := c.cache.get(ck); ok {
+			return b, nil
+		}
+	}
 	var lastErr error
 	for attempt := 0; attempt <= c.Retries; attempt++ {
 		if attempt > 0 {
@@ -64,8 +138,9 @@ func (c *Client) Get(ctx context.Context, url string) ([]byte, error) {
 			case <-time.After(backoff(attempt)):
 			}
 		}
-		body, retry, err := c.do(ctx, url)
+		body, retry, err := c.do(ctx, http.MethodGet, url, nil, nil)
 		if err == nil {
+			c.cache.put(ck, body)
 			return body, nil
 		}
 		lastErr = err
@@ -73,27 +148,58 @@ func (c *Client) Get(ctx context.Context, url string) ([]byte, error) {
 			return nil, err
 		}
 	}
-	return nil, fmt.Errorf("get %s: %w", url, lastErr)
+	return nil, lastErr
 }
 
-func (c *Client) do(ctx context.Context, url string) (body []byte, retry bool, err error) {
+// do performs one request and returns the body. retry reports whether the
+// failure is worth another attempt. header, when non-nil, is applied to the
+// request; reqBody, when non-nil, is the request payload.
+func (c *Client) do(ctx context.Context, method, url string, header http.Header, reqBody []byte) (body []byte, retry bool, err error) {
 	c.pace()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	var rdr io.Reader
+	if reqBody != nil {
+		rdr = bytes.NewReader(reqBody)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, url, rdr)
 	if err != nil {
 		return nil, false, err
 	}
 	req.Header.Set("User-Agent", c.UserAgent)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/json")
+	req.Header.Set("Accept-Language", localeToAcceptLanguage(c.Locale))
+	for k, vs := range header {
+		for _, v := range vs {
+			req.Header.Set(k, v)
+		}
+	}
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
+		// A connection reset mid-handshake is how the edge sometimes drops a
+		// datacenter request; treat a transport error as retryable.
 		return nil, true, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+	switch {
+	case resp.StatusCode == http.StatusOK:
+		// fall through to read and check the body
+	case resp.StatusCode == http.StatusTooManyRequests:
+		return nil, true, ErrRateLimited
+	case resp.StatusCode == http.StatusUnauthorized:
+		// A 401 on a fusion request is a rejected key; on the web plane it reads
+		// as the wall.
+		if header != nil && header.Get("Authorization") != "" {
+			return nil, false, ErrKeyRejected
+		}
+		return nil, false, ErrBlocked
+	case resp.StatusCode == http.StatusForbidden:
+		return nil, false, ErrBlocked
+	case resp.StatusCode == http.StatusNotFound, resp.StatusCode == http.StatusGone:
+		return nil, false, ErrNotFound
+	case resp.StatusCode >= 500:
 		return nil, true, fmt.Errorf("http %d", resp.StatusCode)
-	}
-	if resp.StatusCode != http.StatusOK {
+	default:
 		return nil, false, fmt.Errorf("http %d", resp.StatusCode)
 	}
 
@@ -101,15 +207,35 @@ func (c *Client) do(ctx context.Context, url string) (body []byte, retry bool, e
 	if err != nil {
 		return nil, true, err
 	}
+	if isChallenge(b) {
+		return nil, false, ErrBlocked
+	}
 	return b, false, nil
 }
 
-// pace blocks until at least Rate has passed since the previous request.
+// isChallenge reports whether a 200 body is in fact the PerimeterX bot wall,
+// which the edge sometimes serves with a 200 status, or an empty body where a
+// real page would be large. The markers are the PerimeterX captcha host and the
+// block-page text.
+func isChallenge(b []byte) bool {
+	if len(bytes.TrimSpace(b)) == 0 {
+		return true
+	}
+	return bytes.Contains(b, []byte("px-captcha")) ||
+		bytes.Contains(b, []byte("captcha.px-cloud.net")) ||
+		bytes.Contains(b, []byte("_pxhd")) ||
+		bytes.Contains(b, []byte("Please verify you are a human"))
+}
+
+// pace blocks until at least Delay has passed since the previous request.
 func (c *Client) pace() {
-	if c.Rate <= 0 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.Delay <= 0 {
+		c.last = time.Now()
 		return
 	}
-	if wait := c.Rate - time.Since(c.last); wait > 0 {
+	if wait := c.Delay - time.Since(c.last); wait > 0 {
 		time.Sleep(wait)
 	}
 	c.last = time.Now()
@@ -123,78 +249,19 @@ func backoff(attempt int) time.Duration {
 	return d
 }
 
-// Page is the scaffold's one example record: a single page, addressed by the
-// path that names it on yelp.com. It is a stand-in for the typed records you
-// will model from the real yelp endpoints. The kit struct tags make it
-// addressable as a resource URI (see domain.go): ID is the URI id, and Body is
-// the long text `yelp cat` and the Markdown export print.
-type Page struct {
-	ID    string `json:"id" kit:"id"`
-	URL   string `json:"url"`
-	Title string `json:"title,omitempty"`
-	Body  string `json:"body,omitempty" kit:"body"`
+// localeToAcceptLanguage turns a Yelp locale ("en_US") into an Accept-Language
+// header value ("en-US,en;q=0.9").
+func localeToAcceptLanguage(locale string) string {
+	if locale == "" {
+		return "en-US,en;q=0.9"
+	}
+	tag := strings.ReplaceAll(locale, "_", "-")
+	lang := tag
+	if i := strings.IndexByte(tag, '-'); i > 0 {
+		lang = tag[:i]
+	}
+	return tag + "," + lang + ";q=0.9"
 }
 
-// GetPage fetches one page by its path (for example "wiki/Go") and returns it as
-// a record. The scaffold keeps a plain-text preview of the response as the body;
-// replace the parsing with the real fields once you know the endpoint's shape.
-func (c *Client) GetPage(ctx context.Context, path string) (*Page, error) {
-	path = strings.Trim(path, "/")
-	url := BaseURL + "/" + path
-	body, err := c.Get(ctx, url)
-	if err != nil {
-		return nil, err
-	}
-	return &Page{ID: path, URL: url, Title: path, Body: pageText(body)}, nil
-}
-
-// PageLinks fetches a page and returns the same-host pages it links to, as page
-// stubs. It shows the member-listing pattern the URI driver relies on: every
-// stub carries enough (an id and a URL) to be addressed and followed on its own.
-func (c *Client) PageLinks(ctx context.Context, path string, limit int) ([]*Page, error) {
-	path = strings.Trim(path, "/")
-	body, err := c.Get(ctx, BaseURL+"/"+path)
-	if err != nil {
-		return nil, err
-	}
-	var out []*Page
-	seen := map[string]bool{}
-	for _, p := range linkPaths(body) {
-		if seen[p] {
-			continue
-		}
-		seen[p] = true
-		out = append(out, &Page{ID: p, URL: BaseURL + "/" + p})
-		if limit > 0 && len(out) >= limit {
-			break
-		}
-	}
-	return out, nil
-}
-
-var (
-	hrefRE = regexp.MustCompile(`href="(/[^":#?]+)"`)
-	tagRE  = regexp.MustCompile(`<[^>]+>`)
-)
-
-// linkPaths pulls the relative link targets out of an HTML response, so a list
-// op can turn each into an addressable page stub.
-func linkPaths(body []byte) []string {
-	var out []string
-	for _, m := range hrefRE.FindAllSubmatch(body, -1) {
-		if p := strings.Trim(string(m[1]), "/"); p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
-}
-
-// pageText reduces an HTML response to a short plain-text preview, a stand-in
-// for the typed extract a real endpoint would hand you.
-func pageText(body []byte) string {
-	s := strings.Join(strings.Fields(tagRE.ReplaceAllString(string(body), " ")), " ")
-	if len(s) > 500 {
-		s = s[:500]
-	}
-	return s
-}
+// ClearCache removes the on-disk cache.
+func (c *Client) ClearCache() error { return c.cache.clear() }
