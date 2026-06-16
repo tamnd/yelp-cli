@@ -75,7 +75,7 @@ func (c *Client) fusionSuggest(ctx context.Context, prefix string, limit int) ([
 		if cat.Title == "" {
 			continue
 		}
-		if !add(&Suggestion{Query: prefix, Text: squish(cat.Title), Kind: "category", Alias: cat.Alias, SearchRef: squish(cat.Title)}) {
+		if !add(&Suggestion{Query: prefix, Text: squish(cat.Title), Kind: "category", Alias: cat.Alias, SearchRef: squish(cat.Title), Category: cat.Alias}) {
 			return out, nil
 		}
 	}

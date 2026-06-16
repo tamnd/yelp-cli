@@ -3,6 +3,8 @@ package yelp
 import (
 	"context"
 	"net/url"
+	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -39,6 +41,7 @@ type fusionBusinessResp struct {
 	ReviewCount  int      `json:"review_count"`
 	Rating       float64  `json:"rating"`
 	Price        string   `json:"price"`
+	Distance     float64  `json:"distance"` // meters from the search center, present on a search result
 	Photos       []string `json:"photos"`
 	Transactions []string `json:"transactions"`
 	Categories   []struct {
@@ -99,6 +102,7 @@ func (r fusionBusinessResp) toBusiness(alias string) *Business {
 		DisplayAddress: r.Location.DisplayAddress,
 		Lat:            r.Coordinates.Latitude,
 		Lng:            r.Coordinates.Longitude,
+		Distance:       r.Distance,
 		Transactions:   r.Transactions,
 		IsClaimed:      r.IsClaimed,
 		IsClosed:       r.IsClosed,
@@ -122,11 +126,7 @@ func (r fusionBusinessResp) toBusiness(alias string) *Business {
 			b.Hours = append(b.Hours, fusionHourLine(o.Day, o.Start, o.End))
 		}
 	}
-	for k, v := range r.Attributes {
-		if on, ok := v.(bool); ok && on {
-			b.Attributes = append(b.Attributes, k)
-		}
-	}
+	b.Attributes = flattenAttributes(r.Attributes)
 	applyEdges(b)
 	return b
 }
@@ -184,6 +184,42 @@ func applyEdges(b *Business) {
 	if len(b.CategoryAliases) > 0 {
 		b.CategoryRef = b.CategoryAliases[0]
 	}
+}
+
+// flattenAttributes turns the Fusion attributes map into a stable, sorted list a
+// reader and a filter can use. A boolean flag that is on becomes its bare key
+// ("BusinessAcceptsCreditCards"); a valued attribute becomes "key=value"
+// ("RestaurantsPriceRange2=2", "WiFi=free"); a nested group (BusinessParking,
+// Ambience) becomes one "group.sub" or "group.sub=value" entry per set member.
+// Off flags, empty values, and null entries are dropped, since they carry no
+// fact. Map iteration is unordered, so the result is sorted to keep the record
+// stable across reads.
+func flattenAttributes(attrs map[string]any) []string {
+	var out []string
+	var add func(prefix string, v any)
+	add = func(prefix string, v any) {
+		switch t := v.(type) {
+		case bool:
+			if t {
+				out = append(out, prefix)
+			}
+		case string:
+			if s := strings.TrimSpace(t); s != "" && s != "none" {
+				out = append(out, prefix+"="+s)
+			}
+		case float64:
+			out = append(out, prefix+"="+strconv.FormatFloat(t, 'f', -1, 64))
+		case map[string]any:
+			for k, sv := range t {
+				add(prefix+"."+k, sv)
+			}
+		}
+	}
+	for k, v := range attrs {
+		add(k, v)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // jsonLDHours turns the openingHoursSpecification (or the simpler openingHours

@@ -18,14 +18,18 @@ var (
 // them onto the resolved config in finalize, using the exact keys
 // ClientFromConfig reads.
 type builder struct {
-	userAgent string
-	locale    string
-	location  string
-	sort      string
-	price     string
-	plane     string
-	cacheTTL  string
-	refresh   bool
+	userAgent  string
+	locale     string
+	location   string
+	sort       string
+	price      string
+	radius     string
+	categories string
+	attributes string
+	openNow    bool
+	plane      string
+	cacheTTL   string
+	refresh    bool
 }
 
 // NewApp assembles the kit application from the yelp domain. The domain's
@@ -58,6 +62,10 @@ func (b *builder) globals(f *kit.FlagSet) {
 	f.StringVar(&b.location, "location", "", "place to scope a search or autocomplete to, e.g. \"Oakland, CA\"")
 	f.StringVar(&b.sort, "sort", "", "search order: best_match, rating, review_count, or distance")
 	f.StringVar(&b.price, "price", "", "search price filter: any of 1,2,3,4 comma-joined")
+	f.StringVar(&b.radius, "radius", "", "fusion search radius in meters from the center (max 40000)")
+	f.StringVar(&b.categories, "categories", "", "fusion search category filter: one or more aliases comma-joined")
+	f.StringVar(&b.attributes, "attributes", "", "fusion search attribute filter: one or more aliases comma-joined")
+	f.BoolVar(&b.openNow, "open-now", false, "fusion search filter: only businesses open now")
 	f.StringVar(&b.plane, "plane", "", "data plane: auto, web, or fusion (default auto; fusion needs YELP_API_KEY)")
 	f.StringVar(&b.cacheTTL, "cache-ttl", yelp.DefaultCacheTTL.String(), "how long a cached response stays fresh")
 	f.BoolVar(&b.refresh, "refresh", false, "fetch fresh copies and rewrite the cache, ignoring any hit")
@@ -77,8 +85,14 @@ func (b *builder) finalize(c *kit.Config) {
 	set("location", b.location)
 	set("sort", b.sort)
 	set("price", b.price)
+	set("radius", b.radius)
+	set("categories", b.categories)
+	set("attributes", b.attributes)
 	set("plane", b.plane)
 	set("cache-ttl", b.cacheTTL)
+	if b.openNow {
+		c.Extra["open-now"] = "true"
+	}
 	if b.refresh {
 		c.Extra["refresh"] = "true"
 	}

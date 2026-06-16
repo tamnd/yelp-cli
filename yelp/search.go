@@ -34,6 +34,13 @@ func (c *Client) fusionSearch(ctx context.Context, term, location string, limit 
 	if limit <= 0 {
 		limit = defaultLimit
 	}
+	hasGeo := location != "" || c.Latitude != 0 || c.Longitude != 0
+	if !hasGeo {
+		// The Fusion search endpoint requires a place or a coordinate; refuse the
+		// call here so the operator gets a clear message, not a 400 read as a key
+		// problem.
+		return nil, ErrNeedLocation
+	}
 	var out []*Business
 	seen := map[string]bool{}
 	for offset := 0; offset < limit; offset += 50 {
@@ -56,6 +63,18 @@ func (c *Client) fusionSearch(ctx context.Context, term, location string, limit 
 		}
 		if c.Price != "" {
 			q.Set("price", c.Price)
+		}
+		if c.Radius > 0 {
+			q.Set("radius", strconv.Itoa(c.Radius))
+		}
+		if c.CategoryFilter != "" {
+			q.Set("categories", c.CategoryFilter)
+		}
+		if c.Attributes != "" {
+			q.Set("attributes", c.Attributes)
+		}
+		if c.OpenNow {
+			q.Set("open_now", "true")
 		}
 		if c.Locale != "" {
 			q.Set("locale", c.Locale)

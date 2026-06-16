@@ -79,6 +79,17 @@ type Config struct {
 	Sort string
 	// Price filters a search: any of 1,2,3,4 ("$" to "$$$$"), comma-joined.
 	Price string
+	// Radius narrows a fusion search to this many meters from the center (max
+	// 40000); zero leaves it to Yelp.
+	Radius int
+	// CategoryFilter filters a fusion search to one or more category aliases,
+	// comma-joined ("coffee,bakeries").
+	CategoryFilter string
+	// Attributes filters a fusion search to businesses carrying every listed
+	// attribute, comma-joined ("hot_and_new,wheelchair_accessible").
+	Attributes string
+	// OpenNow filters a fusion search to businesses open at request time.
+	OpenNow bool
 
 	// Delay is the minimum gap between requests. Zero means no pacing.
 	Delay   time.Duration

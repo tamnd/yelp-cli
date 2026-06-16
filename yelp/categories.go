@@ -23,6 +23,58 @@ func (c *Client) Categories(ctx context.Context, limit int) ([]*Category, error)
 	return c.fusionCategories(ctx, limit)
 }
 
+// Category returns one category by alias. Like Categories it is Fusion-backed, so
+// the web plane reports ErrNeedKey. It carries the parent edge a crawl climbs to
+// walk up the taxonomy and the search edge it descends to reach businesses.
+func (c *Client) Category(ctx context.Context, alias string) (*Category, error) {
+	alias = strings.Trim(strings.TrimSpace(alias), "/")
+	if alias == "" {
+		return nil, ErrNotFound
+	}
+	if !c.usesFusion() {
+		if err := c.requireFusion(); err != nil {
+			return nil, err
+		}
+	}
+	q := url.Values{}
+	if c.Locale != "" {
+		q.Set("locale", c.Locale)
+	}
+	var resp fusionCategoryResp
+	if err := c.fusionGet(ctx, "categories/"+url.PathEscape(alias), q, &resp); err != nil {
+		return nil, err
+	}
+	if resp.Category.Alias == "" {
+		return nil, ErrNotFound
+	}
+	return newCategory(resp.Category.Alias, resp.Category.Title, resp.Category.ParentAliases), nil
+}
+
+// fusionCategoryResp is the GET /v3/categories/{alias} shape: the one category
+// wrapped under a "category" key.
+type fusionCategoryResp struct {
+	Category struct {
+		Alias         string   `json:"alias"`
+		Title         string   `json:"title"`
+		ParentAliases []string `json:"parent_aliases"`
+	} `json:"category"`
+}
+
+// newCategory builds a Category with both taxonomy edges set: SearchRef into a
+// search by this alias, and ParentRef up to the first parent when there is one.
+func newCategory(alias, title string, parents []string) *Category {
+	cat := &Category{
+		Alias:     alias,
+		Title:     squish(title),
+		Parents:   parents,
+		SearchRef: alias,
+	}
+	if len(parents) > 0 {
+		cat.ParentRef = parents[0]
+	}
+	return cat
+}
+
 // fusionCategoriesResp is the GET /v3/categories shape.
 type fusionCategoriesResp struct {
 	Categories []struct {
@@ -52,12 +104,7 @@ func (c *Client) fusionCategories(ctx context.Context, limit int) ([]*Category, 
 		if !categoryInCountry(country, cat.CountryWhitelist, cat.CountryBlacklist) {
 			continue
 		}
-		out = append(out, &Category{
-			Alias:     cat.Alias,
-			Title:     squish(cat.Title),
-			Parents:   cat.ParentAliases,
-			SearchRef: cat.Alias,
-		})
+		out = append(out, newCategory(cat.Alias, cat.Title, cat.ParentAliases))
 		if limit > 0 && len(out) >= limit {
 			break
 		}

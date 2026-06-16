@@ -35,19 +35,23 @@ import (
 // transient failures, detects the bot wall, and caches response bodies on disk
 // keyed by the request.
 type Client struct {
-	HTTP       *http.Client
-	BaseURL    string // web plane root
-	FusionBase string // fusion plane root
-	UserAgent  string
-	Locale     string
-	Plane      string
-	Location   string
-	Latitude   float64
-	Longitude  float64
-	Sort       string
-	Price      string
-	Delay      time.Duration
-	Retries    int
+	HTTP           *http.Client
+	BaseURL        string // web plane root
+	FusionBase     string // fusion plane root
+	UserAgent      string
+	Locale         string
+	Plane          string
+	Location       string
+	Latitude       float64
+	Longitude      float64
+	Sort           string
+	Price          string
+	Radius         int
+	CategoryFilter string
+	Attributes     string
+	OpenNow        bool
+	Delay          time.Duration
+	Retries        int
 
 	apiKey string // the Fusion bearer key, from YELP_API_KEY; empty leaves fusion unavailable
 
@@ -61,21 +65,25 @@ type Client struct {
 // NewClient builds a client from cfg.
 func NewClient(cfg Config) *Client {
 	c := &Client{
-		HTTP:       &http.Client{Timeout: cfg.Timeout},
-		BaseURL:    cfg.BaseURL,
-		FusionBase: cfg.FusionBase,
-		UserAgent:  cfg.UserAgent,
-		Locale:     cfg.Locale,
-		Plane:      cfg.Plane,
-		Location:   cfg.Location,
-		Latitude:   cfg.Latitude,
-		Longitude:  cfg.Longitude,
-		Sort:       cfg.Sort,
-		Price:      cfg.Price,
-		Delay:      cfg.Delay,
-		Retries:    cfg.Retries,
-		apiKey:     cfg.APIKey,
-		refresh:    cfg.Refresh,
+		HTTP:           &http.Client{Timeout: cfg.Timeout},
+		BaseURL:        cfg.BaseURL,
+		FusionBase:     cfg.FusionBase,
+		UserAgent:      cfg.UserAgent,
+		Locale:         cfg.Locale,
+		Plane:          cfg.Plane,
+		Location:       cfg.Location,
+		Latitude:       cfg.Latitude,
+		Longitude:      cfg.Longitude,
+		Sort:           cfg.Sort,
+		Price:          cfg.Price,
+		Radius:         cfg.Radius,
+		CategoryFilter: cfg.CategoryFilter,
+		Attributes:     cfg.Attributes,
+		OpenNow:        cfg.OpenNow,
+		Delay:          cfg.Delay,
+		Retries:        cfg.Retries,
+		apiKey:         cfg.APIKey,
+		refresh:        cfg.Refresh,
 	}
 	if c.BaseURL == "" {
 		c.BaseURL = BaseURL

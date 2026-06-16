@@ -86,6 +86,7 @@ yelp biz garaje-san-francisco               # one business by alias
 yelp reviews garaje-san-francisco           # a business's reviews
 yelp user <user-id>                         # a reviewer's public profile (web plane only)
 yelp categories                             # the Yelp category taxonomy (needs YELP_API_KEY)
+yelp category coffee                        # one category by alias (needs YELP_API_KEY)
 ```
 
 Most commands accept a bare alias, a `/biz/` path, or a full Yelp URL wherever
@@ -105,6 +106,15 @@ and `--price 1,2,3,4`:
 yelp search "ramen" --location "Oakland, CA" --sort rating --price 1,2 -n 10
 ```
 
+The fusion plane carries more search filters: `--radius <meters>` from the center,
+`--categories <alias,alias>`, `--attributes <alias,alias>`, and `--open-now`. A
+fusion search needs a place, so pass a location argument or `--location` (or a
+latitude and longitude); without one it exits 2 rather than guessing.
+
+```sh
+yelp search "coffee" "Oakland, CA" --radius 1500 --open-now --attributes wheelchair_accessible
+```
+
 ## How it works
 
 On the web plane, a business page renders server-side and embeds a schema.org
@@ -118,7 +128,8 @@ logged-out reader looks like.
 
 On the fusion plane, the same commands call the matching `api.yelp.com/v3`
 endpoint (`businesses/{id}`, `businesses/search`, `businesses/{id}/reviews`,
-`autocomplete`, `categories`) with the key in an `Authorization: Bearer` header.
+`autocomplete`, `categories`, `categories/{alias}`) with the key in an
+`Authorization: Bearer` header.
 
 Prices, hours, and dates are read in whatever locale Yelp serves; set `--locale`
 (default `en_US`) to ask for another.
@@ -142,8 +153,8 @@ Reachable on the fusion plane from any network, best-effort on the web plane:
 
 Fusion plane only:
 
-- `categories` (the `categories` endpoint; there is no clean web equivalent, so
-  this needs `YELP_API_KEY`)
+- `categories` and `category` (the `categories` endpoints; there is no clean web
+  equivalent, so these need `YELP_API_KEY`)
 
 Web plane only:
 
@@ -158,11 +169,13 @@ browser reads, the way it reads it.
 Records carry only fields a logged-out reader or a free Fusion key can fill.
 There is no owner dashboard, no message thread, no private analytics, because none
 of that is reachable without a signed-in account. A business shows its name,
-rating and review count, price, categories, address and coordinates, hours,
-transactions, attributes, claim and closure state, photos, and description; a
-review carries the rating, author and a link to the author's profile, date, text,
-and the useful/funny/cool counts; a user carries the public profile a visitor
-sees. A field a surface does not show is left empty rather than guessed.
+rating and review count, price, categories, address and coordinates, distance
+from a search center, hours, transactions, attributes, claim and closure state,
+photos, and description; a review carries the rating, author and a link to the
+author's profile, date, text, and the useful/funny/cool counts; a user carries
+the public profile a visitor sees; a category carries its title, parents, and the
+edges into a search and up to its parent. A field a surface does not show is left
+empty rather than guessed.
 
 When something is genuinely missing the exit code says which, so a script can tell
 the cases apart:
@@ -187,6 +200,7 @@ the cases apart:
 | `user <id>` | A reviewer's public profile (web plane only) |
 | `suggest <prefix>` | Autocomplete suggestions for a prefix |
 | `categories` | The Yelp category taxonomy (needs `YELP_API_KEY`) |
+| `category <alias>` | One category by alias (needs `YELP_API_KEY`) |
 | `ref id <ref>` | Classify a reference into its (kind, id), offline |
 | `ref url <kind> <id>` | Build the canonical URL for a (kind, id), offline |
 | `serve` | Serve the same operations over HTTP as NDJSON |
@@ -265,16 +279,20 @@ ant get yelp://biz/<alias>        # fetch a business
 ant cat yelp://biz/<alias>        # just the description body
 ant ls  yelp://reviews/<alias>    # a business's reviews, each addressable
 ant get yelp://user/<id>          # fetch a reviewer's profile
+ant get yelp://category/<alias>   # fetch one category, with its parent edge
 ant url yelp://biz/<alias>        # the live https URL
 ```
 
 Records carry explicit edges that close into one connected graph, so a host can
 breadth-first crawl it and write it to disk: a suggestion fans out into a place
-search and, for a business suggestion, straight to that business; a search card
+search, straight to a business, or into the category that names it; a search card
 links to its full business; a business links to its reviews and a same-category
 search; a review links back to its business and on to the reviewer's profile; a
-category fans into a search. No node is left without an outward edge, so a crawl
-started anywhere reaches the rest of the reachable site. `ant export <uri>
+category fans into a search and climbs to its parent. The business graph and the
+category taxonomy are both fully connected, so a crawl started anywhere reaches
+the rest of the reachable site. The one leaf is the user: the Fusion API has no
+user endpoint and the web profile shows no clean reviews feed to a logged-out
+reader, so a reviewer is a leaf rather than a fabricated edge. `ant export <uri>
 --follow N` walks those edges. See the
 [resource-URI guide](https://yelp-cli.tamnd.com/guides/resource-uris/) for the
 full edge map.
