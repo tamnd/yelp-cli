@@ -36,7 +36,8 @@ func TestClassify(t *testing.T) {
 		{"molinari-delicatessen-san-francisco", "biz", "molinari-delicatessen-san-francisco"},
 		{"https://www.yelp.com/user_details?userid=abc123", "user", "abc123"},
 		{"/user/xyz789", "user", "xyz789"},
-		{"abcdefghij0123456789AB", "biz", "abcdefghij0123456789AB"}, // 22-char encid
+		{"https://www.yelp.com/search?cflt=coffee&find_loc=SF", "category", "coffee"}, // cflt parameter
+		{"abcdefghij0123456789AB", "biz", "abcdefghij0123456789AB"},                   // 22-char encid
 		{"", "unknown", ""},
 		{"Not An Alias!", "unknown", ""},
 	}
@@ -54,6 +55,9 @@ func TestURLFor(t *testing.T) {
 	}
 	if got := URLFor("user", "u1"); got != BaseURL+"/user_details?userid=u1" {
 		t.Errorf("user url = %q", got)
+	}
+	if got := URLFor("category", "coffee"); got != BaseURL+"/search?cflt=coffee" {
+		t.Errorf("category url = %q", got)
 	}
 	if got := URLFor("nope", "x"); got != "" {
 		t.Errorf("unknown kind should be empty, got %q", got)
@@ -138,6 +142,99 @@ func TestFusionBusiness(t *testing.T) {
 	}
 }
 
+func TestFlattenAttributes(t *testing.T) {
+	attrs := map[string]any{
+		"BusinessAcceptsCreditCards": true,
+		"RestaurantsDelivery":        false,
+		"WiFi":                       "free",
+		"NoiseLevel":                 "none", // a "none" value is dropped
+		"BusinessParking":            map[string]any{"garage": true, "lot": false},
+	}
+	got := flattenAttributes(attrs)
+	want := []string{
+		"BusinessAcceptsCreditCards",
+		"BusinessParking.garage",
+		"WiFi=free",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("flattenAttributes = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("flattenAttributes[%d] = %q, want %q (full %v)", i, got[i], want[i], got)
+		}
+	}
+}
+
+func TestFusionSearchFilters(t *testing.T) {
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if q.Get("radius") != "1500" || q.Get("categories") != "coffee" ||
+			q.Get("attributes") != "hot_and_new" || q.Get("open_now") != "true" {
+			t.Errorf("filters missing from query %q", r.URL.RawQuery)
+		}
+		_, _ = w.Write([]byte(`{"total":1,"businesses":[` + fusionBizJSON + `]}`))
+	})
+	c := newTestClient(t, h, planeFusion, "KEY")
+	c.Radius = 1500
+	c.CategoryFilter = "coffee"
+	c.Attributes = "hot_and_new"
+	c.OpenNow = true
+	if _, err := c.Search(context.Background(), "espresso", "Oakland", 5); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFusionSearchNeedsLocation(t *testing.T) {
+	c := newTestClient(t, http.NotFoundHandler(), planeFusion, "KEY")
+	_, err := c.Search(context.Background(), "tacos", "", 5)
+	if !errors.Is(err, ErrNeedLocation) {
+		t.Errorf("want ErrNeedLocation, got %v", err)
+	}
+}
+
+func TestFusionSearchDistance(t *testing.T) {
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"total":1,"businesses":[{"alias":"a","name":"A","distance":1234.5}]}`))
+	})
+	c := newTestClient(t, h, planeFusion, "KEY")
+	bs, err := c.Search(context.Background(), "x", "Oakland", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bs) != 1 || bs[0].Distance != 1234.5 {
+		t.Errorf("distance not carried: %+v", bs)
+	}
+}
+
+func TestFusionCategory(t *testing.T) {
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v3/categories/coffee" {
+			t.Errorf("path %q", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"category":{"alias":"coffee","title":"Coffee & Tea","parent_aliases":["food"]}}`))
+	})
+	c := newTestClient(t, h, planeFusion, "KEY")
+	cat, err := c.Category(context.Background(), "coffee")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cat.Alias != "coffee" || cat.Title != "Coffee & Tea" {
+		t.Errorf("bad category: %+v", cat)
+	}
+	if cat.SearchRef != "coffee" || cat.ParentRef != "food" {
+		t.Errorf("bad category edges: search=%q parent=%q", cat.SearchRef, cat.ParentRef)
+	}
+}
+
+func TestCategoryNeedKeyOnWeb(t *testing.T) {
+	c := newTestClient(t, http.NotFoundHandler(), planeWeb, "")
+	_, err := c.Category(context.Background(), "coffee")
+	if !errors.Is(err, ErrNeedKey) {
+		t.Errorf("want ErrNeedKey, got %v", err)
+	}
+}
+
 func TestFusionKeyRejected(t *testing.T) {
 	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(401)
@@ -203,6 +300,9 @@ func TestFusionCategories(t *testing.T) {
 	if len(cs) != 1 || cs[0].Alias != "delis" || cs[0].SearchRef != "delis" {
 		t.Errorf("country filter failed: %+v", cs)
 	}
+	if cs[0].ParentRef != "food" {
+		t.Errorf("missing parent edge: %q", cs[0].ParentRef)
+	}
 }
 
 func TestCategoriesNeedKeyOnWeb(t *testing.T) {
@@ -231,7 +331,7 @@ func TestFusionSuggest(t *testing.T) {
 	if ss[1].Kind != "business" || ss[1].Business != "b1" {
 		t.Errorf("bad business suggestion: %+v", ss[1])
 	}
-	if ss[2].Kind != "category" || ss[2].Alias != "pizza" {
+	if ss[2].Kind != "category" || ss[2].Alias != "pizza" || ss[2].Category != "pizza" {
 		t.Errorf("bad category suggestion: %+v", ss[2])
 	}
 }

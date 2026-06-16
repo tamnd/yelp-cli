@@ -8,12 +8,15 @@ import (
 // ids.go resolves a reference to a (kind, id) pair and builds canonical URLs, all
 // offline. It backs `yelp ref id` and `yelp ref url`, and the Resolver the ant
 // host calls to turn a yelp:// URI into the right command. Yelp addresses a
-// business by a human alias (the /biz/<alias> slug) and a user by an opaque id
-// (the userid query parameter or the /user/<id> path), so the two resolver kinds
-// are biz and user.
+// business by a human alias (the /biz/<alias> slug), a user by an opaque id (the
+// userid query parameter or the /user/<id> path), and a category by its alias
+// (the cflt search parameter), so the resolver kinds are biz, user, and category.
 
 // Classify reads a reference (a URL, a path, or a bare id/alias) and reports what
-// it points at. Kind is one of biz, user, or unknown.
+// it points at. Kind is one of biz, user, category, or unknown. A category is
+// recognized only from a cflt parameter; a bare slug stays a business, since a
+// business alias and a category alias share a shape and the business is the
+// common case.
 func Classify(ref string) Ref {
 	in := strings.TrimSpace(ref)
 	r := Ref{Input: in, Kind: "unknown"}
@@ -32,6 +35,10 @@ func Classify(ref string) Ref {
 		case segs != nil && segs[0] == "user_details":
 			if uid := queryParam(in, "userid"); uid != "" {
 				r.Kind, r.ID = "user", uid
+			}
+		case segs != nil && segs[0] == "search":
+			if cflt := queryParam(in, "cflt"); cflt != "" {
+				r.Kind, r.ID = "category", cflt
 			}
 		}
 		if r.Kind != "unknown" {
@@ -64,6 +71,8 @@ func URLFor(kind, id string) string {
 		return BaseURL + "/biz/" + id
 	case "user":
 		return BaseURL + "/user_details?userid=" + url.QueryEscape(id)
+	case "category":
+		return BaseURL + "/search?cflt=" + url.QueryEscape(id)
 	default:
 		return ""
 	}

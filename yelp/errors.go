@@ -36,4 +36,10 @@ var (
 	// ErrKeyRejected is a fusion request the API refused: a 401 from a missing,
 	// malformed, or revoked key. Exit code 4.
 	ErrKeyRejected = errors.New("the Yelp Fusion API key was rejected (check YELP_API_KEY)")
+
+	// ErrNeedLocation is a fusion search with neither a place nor a coordinate to
+	// scope it. The Fusion search endpoint requires one or the other, so the
+	// client refuses the call rather than letting the API reject it as a bad
+	// request. The remedy is a --location or a latitude and longitude. Exit code 2.
+	ErrNeedLocation = errors.New("a fusion search needs a place: pass a location argument or set --location (or a latitude and longitude)")
 )

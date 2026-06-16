@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/tamnd/any-cli/kit"
@@ -115,6 +116,13 @@ func (Domain) Register(app *kit.App) {
 		URIType: "categories",
 	}, categories)
 
+	kit.Handle(app, kit.OpMeta{
+		Name: "category", Group: "read", Single: true,
+		Summary: "Show one category by alias (needs YELP_API_KEY)",
+		URIType: "category", Resolver: true,
+		Args: []kit.Arg{{Name: "alias", Help: "category alias, e.g. \"coffee\""}},
+	}, getCategory)
+
 	// Reference tools (offline).
 	kit.Handle(app, kit.OpMeta{
 		Name: "id", Parent: "ref", Single: true,
@@ -126,7 +134,7 @@ func (Domain) Register(app *kit.App) {
 		Name: "url", Parent: "ref", Single: true,
 		Summary: "Build the canonical URL for a (kind, id)",
 		Args: []kit.Arg{
-			{Name: "kind", Help: "biz or user"},
+			{Name: "kind", Help: "biz, user, or category"},
 			{Name: "id", Help: "the id for that kind"},
 		},
 	}, buildURL)
@@ -170,6 +178,18 @@ func ClientFromConfig(cfg kit.Config) *Client {
 	if v := cfg.Extra["price"]; v != "" {
 		yc.Price = v
 	}
+	if v := cfg.Extra["radius"]; v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			yc.Radius = n
+		}
+	}
+	if v := cfg.Extra["categories"]; v != "" {
+		yc.CategoryFilter = v
+	}
+	if v := cfg.Extra["attributes"]; v != "" {
+		yc.Attributes = v
+	}
+	yc.OpenNow = cfg.Extra["open-now"] == "true"
 	if v := cfg.Extra["plane"]; v != "" {
 		yc.Plane = v
 	}
@@ -229,6 +249,8 @@ func mapErr(err error) error {
 		return errs.NotFound("%s", err.Error())
 	case errors.Is(err, ErrRateLimited):
 		return errs.RateLimited("%s", err.Error())
+	case errors.Is(err, ErrNeedLocation):
+		return errs.Usage("%s", err.Error())
 	case errors.Is(err, ErrBlocked), errors.Is(err, ErrNeedKey), errors.Is(err, ErrKeyRejected):
 		return errs.NeedAuth("%s", err.Error())
 	default:

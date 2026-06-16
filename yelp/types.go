@@ -12,24 +12,30 @@ package yelp
 //
 // The kit:"link" edges connect the records into one graph a host walks for
 // breadth-first crawls, and they are what lets a crawl reconstruct the public
-// site from a single seed. A resolver edge (business, user) names a bare field
-// and points at one record; a collection edge carries the parent id under a
-// <name>_ref field and points at a list authority. Following all of them closes
-// the loop:
+// site from a single seed. A resolver edge (business, user, category) names a
+// bare field and points at one record; a collection edge carries the parent id
+// under a <name>_ref field and points at a list authority. Following all of them
+// closes the loop:
 //
 //	suggestion --search_ref--> search ----> business --reviews_ref--> reviews
-//	suggestion --business----> business                                  |
+//	suggestion --business----> business     business --category_ref-> search
+//	suggestion --category----> category                                  |
 //	category   --search_ref--> search                                    |
-//	business   --category_ref-> search (by category)                     |
+//	category   --parent------> category (up the taxonomy)                |
 //	review --business--> business   review --author_id--> user           |
 //	                                                                      v
 //	                                                  review --business--> business
 //
-// so a suggestion fans out into a place search and (for a business suggestion)
-// straight to that business; a search card walks through to the full business;
+// so a suggestion fans out into a place search, straight to a business, or into
+// the category that names it; a search card walks through to the full business;
 // a business reaches its reviews and a same-category search; a review reaches
 // back to its business and on to the reviewer's profile; a category fans into a
-// search. No node is left without an outward edge.
+// search and climbs to its parent. The business graph (search, biz, reviews) and
+// the taxonomy (categories, category) are both fully connected, so a crawl from
+// any seed reaches the rest of the reachable public site. The one node without an
+// outward edge is the user: the Fusion API has no user endpoint and the web
+// profile exposes no clean reviews feed to a logged-out reader, so a reviewer is
+// a leaf, not a fabricated edge.
 
 // Business is a Yelp business, emitted by search (as a card) and by biz (full
 // detail). The id is the alias, the human slug in /biz/<alias>, so the same
@@ -54,10 +60,11 @@ type Business struct {
 	DisplayAddress  []string `json:"display_address,omitempty" table:"-"` // the address as printed on the page
 	Lat             float64  `json:"lat,omitempty" table:"-"`
 	Lng             float64  `json:"lng,omitempty" table:"-"`
-	Hours           []string `json:"hours,omitempty" table:"-"` // "Mon 9:00-17:00", localized
+	Distance        float64  `json:"distance,omitempty" table:"-"` // meters from the search center, on a fusion search
+	Hours           []string `json:"hours,omitempty" table:"-"`    // "Mon 9:00-17:00", localized
 	OpenNow         bool     `json:"open_now,omitempty" table:"-"`
 	Transactions    []string `json:"transactions,omitempty" table:"-"` // delivery, pickup, restaurant_reservation
-	Attributes      []string `json:"attributes,omitempty" table:"-"`   // e.g. "BusinessAcceptsCreditCards"
+	Attributes      []string `json:"attributes,omitempty" table:"-"`   // a flag like "BusinessAcceptsCreditCards", or "key=value" for a valued one
 	Neighborhoods   []string `json:"neighborhoods,omitempty" table:"-"`
 	IsClaimed       bool     `json:"is_claimed,omitempty" table:"-"`
 	IsClosed        bool     `json:"is_closed,omitempty" table:"-"` // permanently closed
@@ -111,7 +118,8 @@ type User struct {
 // Suggestion is one autocomplete entry, emitted by suggest. Kind is "place",
 // "business", or "category". A place suggestion carries SearchRef as the edge
 // into a search; a business suggestion carries Business as the edge straight to
-// that business; a category suggestion carries SearchRef scoped to the category.
+// that business; a category suggestion carries SearchRef scoped to the category
+// and Category as the edge to the category record itself.
 type Suggestion struct {
 	Query     string  `json:"query"`           // the prefix that was queried
 	Text      string  `json:"text" kit:"id"`   // the suggested text
@@ -121,16 +129,20 @@ type Suggestion struct {
 	Lng       float64 `json:"lng,omitempty" table:"-"`
 	SearchRef string  `json:"search_ref,omitempty" table:"-" kit:"link,kind=yelp/search"` // edge into a search (= text)
 	Business  string  `json:"business,omitempty" table:"-" kit:"link,kind=yelp/biz"`      // edge to a business (= alias), for a business suggestion
+	Category  string  `json:"category,omitempty" table:"-" kit:"link,kind=yelp/category"` // edge to the category (= alias), for a category suggestion
 }
 
-// Category is one Yelp category, emitted by categories. The id is the alias, the
-// slug Yelp uses in the categories param. Parents are the alias's parent
-// categories; SearchRef is the edge into a search by this category.
+// Category is one Yelp category, emitted by categories (the whole taxonomy) and
+// by category (one alias). The id is the alias, the slug Yelp uses in the
+// categories param. Parents are the alias's parent categories; SearchRef is the
+// edge into a search by this category, and ParentRef climbs to the first parent
+// so a crawl can walk the taxonomy tree in both directions.
 type Category struct {
 	Alias     string   `json:"alias" kit:"id"`
 	Title     string   `json:"title,omitempty"`
 	Parents   []string `json:"parents,omitempty" table:"-"`
-	SearchRef string   `json:"search_ref,omitempty" table:"-" kit:"link,kind=yelp/search"` // edge into a search by this category (= alias)
+	SearchRef string   `json:"search_ref,omitempty" table:"-" kit:"link,kind=yelp/search"`   // edge into a search by this category (= alias)
+	ParentRef string   `json:"parent_ref,omitempty" table:"-" kit:"link,kind=yelp/category"` // edge up to the first parent category (= parent alias)
 }
 
 // Ref is the result of `yelp ref id`: the canonical (kind, id) a reference

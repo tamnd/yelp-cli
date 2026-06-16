@@ -29,22 +29,25 @@ The package's `init` registers a domain with the scheme `yelp` for the hosts
 
 A URI is `scheme://authority/id`. The resolver types are:
 
-| URI                   | What it is                            |
-| --------------------- | ------------------------------------- |
-| `yelp://biz/<alias>`  | one business, keyed by its alias      |
-| `yelp://user/<id>`    | a reviewer's public profile           |
+| URI                       | What it is                            |
+| ------------------------- | ------------------------------------- |
+| `yelp://biz/<alias>`      | one business, keyed by its alias      |
+| `yelp://user/<id>`        | a reviewer's public profile           |
+| `yelp://category/<alias>` | one category, keyed by its alias      |
 
 ```bash
 ant get yelp://biz/garaje-san-francisco   # the business record
 ant cat yelp://biz/garaje-san-francisco   # just the description body
 ant get yelp://user/<id>                  # a reviewer's profile
+ant get yelp://category/coffee            # one category, with its parent edge
 ant url yelp://biz/garaje-san-francisco   # the live https URL
 ant resolve https://www.yelp.com/biz/garaje-san-francisco  # a pasted link, back to its URI
 ```
 
 `biz` is best-effort on the web plane (a datacenter may hit Yelp's bot wall and
 report need-auth) and reliable on the fusion plane when `YELP_API_KEY` is set.
-`user` is web plane only, since the Fusion API has no user endpoint. See
+`user` is web plane only, since the Fusion API has no user endpoint. `category` is
+fusion plane only, so it needs `YELP_API_KEY`. See
 [what anonymous access reaches](/getting-started/introduction/#what-anonymous-access-reaches).
 
 ## Collections
@@ -58,6 +61,9 @@ authority, so they never shadow one another:
 | `yelp://reviews/<alias>`     | a business's reviews                |
 | `yelp://suggest/<prefix>`    | autocomplete suggestions            |
 | `yelp://categories`          | the Yelp category taxonomy          |
+
+`category` (singular) resolves one alias and is listed with the resolver types
+above; `categories` (plural) lists the whole taxonomy.
 
 ```bash
 ant ls yelp://search/tacos                  # businesses matching a term
@@ -76,23 +82,29 @@ free text. A resolver edge names a bare field and points at one record; a
 collection edge carries the parent id under a `<name>_ref` field and points at a
 list authority. The edges are:
 
-| From         | Field          | Edge to                  |
-| ------------ | -------------- | ------------------------ |
-| `Suggestion` | `search_ref`   | `yelp://search/<text>`   |
-| `Suggestion` | `business`     | `yelp://biz/<alias>`     |
-| `Business`   | `reviews_ref`  | `yelp://reviews/<alias>` |
-| `Business`   | `category_ref` | `yelp://search/<alias>`  |
-| `Review`     | `business`     | `yelp://biz/<alias>`     |
-| `Review`     | `author_id`    | `yelp://user/<id>`       |
-| `Category`   | `search_ref`   | `yelp://search/<alias>`  |
+| From         | Field          | Edge to                   |
+| ------------ | -------------- | ------------------------- |
+| `Suggestion` | `search_ref`   | `yelp://search/<text>`    |
+| `Suggestion` | `business`     | `yelp://biz/<alias>`      |
+| `Suggestion` | `category`     | `yelp://category/<alias>` |
+| `Business`   | `reviews_ref`  | `yelp://reviews/<alias>`  |
+| `Business`   | `category_ref` | `yelp://search/<alias>`   |
+| `Review`     | `business`     | `yelp://biz/<alias>`      |
+| `Review`     | `author_id`    | `yelp://user/<id>`        |
+| `Category`   | `search_ref`   | `yelp://search/<alias>`   |
+| `Category`   | `parent_ref`   | `yelp://category/<alias>` |
 
 The edges close into one connected graph. A suggestion fans out into a place
-search and, for a business suggestion, straight to that business; a search card
+search, straight to a business, or into the category that names it; a search card
 walks through to its full business; a business reaches its reviews and a
 same-category search; a review reaches back to its business and on to the
-reviewer's own profile; a category fans into a search. No node is left without an
-outward edge, so a crawl started anywhere reaches the rest of the reachable site.
-Starting from any node, `--follow` walks these edges:
+reviewer's own profile; a category fans into a search and climbs to its parent.
+The business graph (search, biz, reviews) and the category taxonomy (categories,
+category) are both fully connected, so a crawl started anywhere reaches the rest
+of the reachable site. The one leaf is the user: the Fusion API has no user
+endpoint and the web profile shows no clean reviews feed to a logged-out reader,
+so a reviewer is a leaf rather than a fabricated edge. Starting from any node,
+`--follow` walks these edges:
 
 ```bash
 ant export yelp://search/tacos --follow 2 --to ./data  # each business, then its reviews and a same-category search

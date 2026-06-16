@@ -104,6 +104,21 @@ func categories(ctx context.Context, in categoriesIn, emit func(*Category) error
 	return emitAll(cs, emit)
 }
 
+// --- category (one alias) ---
+
+type categoryRefIn struct {
+	Alias  string  `kit:"arg" help:"category alias, e.g. \"coffee\""`
+	Client *Client `kit:"inject"`
+}
+
+func getCategory(ctx context.Context, in categoryRefIn, emit func(*Category) error) error {
+	cat, err := in.Client.Category(ctx, in.Alias)
+	if err != nil {
+		return mapErr(err)
+	}
+	return emit(cat)
+}
+
 // --- reference tools (offline) ---
 
 type refIn struct {
@@ -119,8 +134,8 @@ func classifyRef(_ context.Context, in refIn, emit func(*Ref) error) error {
 }
 
 type urlIn struct {
-	Kind string `kit:"arg" help:"biz or user"`
-	ID   string `kit:"arg" help:"the id for that kind (a business alias, or a user id)"`
+	Kind string `kit:"arg" help:"biz, user, or category"`
+	ID   string `kit:"arg" help:"the id for that kind (a business alias, a user id, or a category alias)"`
 }
 
 func buildURL(_ context.Context, in urlIn, emit func(*Ref) error) error {
